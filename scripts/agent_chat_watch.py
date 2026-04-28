@@ -200,7 +200,7 @@ def parse_agent_output(output: str, default_recipient: str) -> tuple[str, str, s
             requested_action = candidate_action
             before = "\n".join(lines[:index]).strip()
             after = "\n".join(lines[index + 3 :]).strip()
-            body = after or before
+            body = "\n\n".join(part for part in (before, after) if part)
             if not body:
                 body = "(No response body returned.)"
             return recipient, status, requested_action, body
