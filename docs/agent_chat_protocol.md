@@ -2,6 +2,8 @@
 
 Use this protocol when Codex and Claude need to collaborate through workspace files instead of IDE agent orchestration.
 
+This protocol is for review/fix loops. For a peer strategy discussion where agents should challenge each other before choosing a direction, use `docs/agent_discussion_protocol.md` with `--mode discussion`.
+
 ## Files
 
 - Use one chat file per topic.
@@ -59,6 +61,12 @@ Writable review/fix loop:
 
 ```bash
 python3 scripts/agent_chat_watch.py docs/agent_chat_example.md --agents=codex,claude --poll=5 --max-turns=20 --codex-sandbox workspace-write --claude-write
+```
+
+Peer discussion loop:
+
+```bash
+python3 scripts/agent_chat_watch.py examples/spec_discussion_example.md --protocol docs/agent_discussion_protocol.md --mode discussion --agents=codex,claude --poll=5 --max-turns=20
 ```
 
 ## Completion Gate
@@ -132,4 +140,3 @@ Review the actual file. If you have required fixes, list them and address Codex.
 
 ---
 ```
-

@@ -102,14 +102,21 @@ def build_prompt(
     latest: MessageBlock,
     repo_root: Path,
     can_edit: bool,
+    mode: str,
 ) -> str:
-    edit_rule = (
-        "- You may edit files directly when the latest message asks you to apply fixes.\n"
-        if can_edit
-        else "- Do not edit files directly in this run. If edits are required, describe them and address Codex.\n"
-    )
+    if mode == "discussion":
+        edit_rule = (
+            "- Do not edit files directly in this run. Keep the discussion open to the other agent "
+            "if changes need debate; close to Kevin with a synthesis once settled.\n"
+        )
+    else:
+        edit_rule = (
+            "- You may edit files directly when the latest message asks you to apply fixes.\n"
+            if can_edit
+            else "- Do not edit files directly in this run. If edits are required, describe them and address Codex.\n"
+        )
     review_rule = ""
-    if is_final_artifact_review(latest):
+    if mode == "review" and is_final_artifact_review(latest):
         review_rule = """
 Final artifact review rule:
 - Treat this as a fresh full review of the target artifact, not a review of only the latest changes.
@@ -120,7 +127,9 @@ Final artifact review rule:
 - If you only have optional notes or no feedback, address Kevin with status: closed.
 """
 
-    fix_loop_rule = """
+    fix_loop_rule = ""
+    if mode == "review":
+        fix_loop_rule = """
 Fix loop rule:
 - If you are Codex and the reviewer listed required fixes, apply the fixes when file editing is allowed.
 - After applying fixes, address the reviewer with status: open and requested_action: final review.
@@ -131,6 +140,20 @@ What do you think of this <plan|feature|change>?
 <absolute target path, or absolute project root plus changed files for multi-file work>
 
 - Do not ask whether the changes are okay. Ask for a fresh review of the artifact.
+"""
+
+    discussion_rule = ""
+    if mode == "discussion":
+        discussion_rule = """
+Discussion mode:
+- Treat this as a peer strategy discussion, not a review/fix handoff.
+- Read any target artifacts named in the latest message before responding.
+- Compare options, challenge weak assumptions, name tradeoffs, and identify missing decisions.
+- If you disagree with the other agent, state the disagreement directly and explain the practical consequence.
+- Keep the thread open to the other agent while there are material unresolved decisions.
+- Close to Kevin only when the agents have a concrete joint recommendation, or block if human input is required.
+- Do not edit the target artifact in discussion mode; propose changes or a synthesis instead.
+- Do not force the conversation into "required fixes" versus "optional notes" unless the latest message explicitly asks for a review.
 """
 
     return f"""You are {agent_name} participating in a file-based agent chat.
@@ -170,6 +193,7 @@ Rules:
 - Keep the response concise and concrete.
 {review_rule}
 {fix_loop_rule}
+{discussion_rule}
 """
 
 
@@ -357,19 +381,46 @@ def should_handle(latest: MessageBlock, agents: set[str]) -> bool:
     return latest.status == "open" and latest.recipient.lower() in agents
 
 
+def resolve_path(path_value: str, primary_root: Path, fallback_root: Path | None = None) -> Path:
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+
+    primary_candidate = primary_root / path
+    if primary_candidate.exists() or fallback_root is None:
+        return primary_candidate
+
+    fallback_candidate = fallback_root / path
+    if fallback_candidate.exists():
+        return fallback_candidate
+
+    return primary_candidate
+
+
 def main() -> int:
-    repo_root = repo_root_from_script()
+    bridge_root = repo_root_from_script()
     parser = argparse.ArgumentParser(description="Watch an agent chat file and invoke local agent CLIs.")
     parser.add_argument(
         "chat_file",
         nargs="?",
         default="docs/agent_chat_example.md",
-        help="Path to chat markdown file, relative to repo root unless absolute.",
+        help="Path to chat markdown file, relative to --repo-root unless absolute.",
     )
     parser.add_argument(
         "--protocol",
         default="docs/agent_chat_protocol.md",
-        help="Path to protocol markdown file, relative to repo root unless absolute.",
+        help="Path to protocol markdown file. Relative paths prefer --repo-root, then the bridge repo.",
+    )
+    parser.add_argument(
+        "--repo-root",
+        default=str(bridge_root),
+        help="Target repository root passed to agents and used for relative chat file paths.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("review", "discussion"),
+        default="review",
+        help="Prompt mode. Use discussion for peer back-and-forth instead of review/fix loops.",
     )
     parser.add_argument(
         "--agents",
@@ -398,18 +449,17 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    chat_file = Path(args.chat_file)
-    if not chat_file.is_absolute():
-        chat_file = repo_root / chat_file
-    protocol_file = Path(args.protocol)
-    if not protocol_file.is_absolute():
-        protocol_file = repo_root / protocol_file
+    repo_root = Path(args.repo_root).expanduser().resolve()
+    chat_file = resolve_path(args.chat_file, repo_root)
+    protocol_file = resolve_path(args.protocol, repo_root, fallback_root=bridge_root)
 
     agents = {agent.strip().lower() for agent in args.agents.split(",") if agent.strip()}
     turns_taken = 0
     last_handled_raw = None
 
     print(f"Watching {chat_file}")
+    print(f"Repository root: {repo_root}")
+    print(f"Mode: {args.mode}")
     print(f"Agents enabled: {', '.join(sorted(agents))}")
     if args.dry_run:
         print("Dry run: no agent commands will be invoked.")
@@ -437,7 +487,15 @@ def main() -> int:
                 (agent == "codex" and args.codex_sandbox != "read-only")
                 or (agent == "claude" and args.claude_write)
             )
-            prompt = build_prompt(agent, protocol_text, chat_text, latest, repo_root, can_edit=can_edit)
+            prompt = build_prompt(
+                agent,
+                protocol_text,
+                chat_text,
+                latest,
+                repo_root,
+                can_edit=can_edit,
+                mode=args.mode,
+            )
             command_override = args.codex_cmd if agent == "codex" else args.claude_cmd
 
             try:

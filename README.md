@@ -1,17 +1,21 @@
 # Codex Claude File Bridge
 
-A local file-based handoff and review loop for Codex CLI and Claude CLI.
+A local file-based handoff, review, and discussion loop for Codex CLI and Claude CLI.
 
-It lets two agents collaborate through append-only Markdown chat files instead of paid IDE orchestration. The workflow is deliberately simple: one agent reviews, the other applies required fixes, then the reviewer performs a fresh full review of the artifact.
+It lets two agents collaborate through append-only Markdown chat files instead of paid IDE orchestration. The default workflow is deliberately simple: one agent reviews, the other applies required fixes, then the reviewer performs a fresh full review of the artifact.
+
+For early product, architecture, or planning work, the watcher also supports a discussion mode where Codex and Claude challenge each other, compare tradeoffs, and converge on a joint recommendation without editing files.
 
 ## What It Does
 
 - Uses Markdown files as the shared message board.
 - Invokes local `codex` and `claude` CLIs.
 - Supports read-only review or writable review/fix loops.
+- Supports read-only peer discussion loops for product/spec/architecture decisions.
+- Can run from this bridge repo while targeting another repo with `--repo-root`.
 - Stops when the latest message is `closed` or `blocked`.
-- Keeps looping only for required fixes.
-- Treats optional notes as non-blocking.
+- In review mode, keeps looping only for required fixes.
+- In review mode, treats optional notes as non-blocking.
 
 ## Requirements
 
@@ -22,6 +26,13 @@ It lets two agents collaborate through append-only Markdown chat files instead o
 
 ## Quick Start
 
+Create a local virtual environment and run the tests:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m unittest discover -s tests
+```
+
 Create or edit a chat file such as:
 
 ```text
@@ -31,22 +42,35 @@ docs/agent_chat_example.md
 Dry-run routing:
 
 ```bash
-python3 scripts/agent_chat_watch.py docs/agent_chat_example.md --once --agents=codex,claude --dry-run
+.venv/bin/python scripts/agent_chat_watch.py docs/agent_chat_example.md --once --agents=codex,claude --dry-run
 ```
 
 Run one read-only Codex turn:
 
 ```bash
-python3 scripts/agent_chat_watch.py docs/agent_chat_example.md --once --agents=codex
+.venv/bin/python scripts/agent_chat_watch.py docs/agent_chat_example.md --once --agents=codex
 ```
 
 Run a writable Codex/Claude review loop:
 
 ```bash
-python3 scripts/agent_chat_watch.py docs/agent_chat_example.md --agents=codex,claude --poll=5 --max-turns=20 --codex-sandbox workspace-write --claude-write
+.venv/bin/python scripts/agent_chat_watch.py docs/agent_chat_example.md --agents=codex,claude --poll=5 --max-turns=20 --codex-sandbox workspace-write --claude-write
 ```
 
-## Stop Rule
+Run a read-only product/spec discussion against another repo:
+
+```bash
+.venv/bin/python scripts/agent_chat_watch.py \
+  /absolute/path/to/target-repo/docs/agent_discussion_product_spec.md \
+  --repo-root /absolute/path/to/target-repo \
+  --protocol docs/agent_discussion_protocol.md \
+  --mode discussion \
+  --agents=codex,claude \
+  --poll=5 \
+  --max-turns=20
+```
+
+## Review Mode Stop Rule
 
 The loop continues for required fixes only.
 
@@ -67,6 +91,34 @@ Optional notes do not keep the loop open:
 - future improvements
 - preferences
 - implementation awareness that does not change behavior
+
+## Discussion Mode
+
+Use discussion mode when you do not want a one-way review. It is intended for:
+
+- product specs
+- architecture choices
+- roadmap/build-order decisions
+- implementation strategy before code edits
+
+Discussion mode changes the agent prompt:
+
+- agents do not edit files
+- agents read named artifacts and compare tradeoffs
+- disagreements are kept open and sent to the other agent
+- the thread closes only when there is a joint recommendation or a human-blocking question
+
+Use the discussion protocol:
+
+```text
+docs/agent_discussion_protocol.md
+```
+
+Example starter chat:
+
+```text
+examples/spec_discussion_example.md
+```
 
 ## Fresh Review Rule
 
@@ -119,4 +171,3 @@ AGENT_CHAT_CLAUDE_WRITE
 ## License
 
 MIT
-

@@ -66,6 +66,94 @@ The response body after the routing fields.
 
         self.assertIn("prompt sent through stdin", output)
 
+    def test_discussion_prompt_uses_peer_discussion_rules(self) -> None:
+        latest = agent_chat_watch.MessageBlock(
+            raw="raw",
+            timestamp="2026-01-01 09:00",
+            sender="kevin",
+            recipient="codex",
+            status="open",
+            requested_action="compare specs",
+            body="What do you think of these specs? Compare them before deciding what to build.",
+        )
+
+        prompt = agent_chat_watch.build_prompt(
+            "codex",
+            "protocol",
+            "chat text",
+            latest,
+            REPO_ROOT,
+            can_edit=True,
+            mode="discussion",
+        )
+
+        self.assertIn("Discussion mode:", prompt)
+        self.assertIn("Treat this as a peer strategy discussion", prompt)
+        self.assertIn("Do not edit the target artifact in discussion mode", prompt)
+        self.assertIn("Keep the discussion open to the other agent", prompt)
+        self.assertNotIn("Fix loop rule:", prompt)
+        self.assertNotIn("Final artifact review rule:", prompt)
+
+    def test_review_prompt_keeps_fix_loop_rules(self) -> None:
+        latest = agent_chat_watch.MessageBlock(
+            raw="raw",
+            timestamp="2026-01-01 09:00",
+            sender="claude",
+            recipient="codex",
+            status="open",
+            requested_action="apply fix",
+            body="Apply the required fix.",
+        )
+
+        prompt = agent_chat_watch.build_prompt(
+            "codex",
+            "protocol",
+            "chat text",
+            latest,
+            REPO_ROOT,
+            can_edit=True,
+            mode="review",
+        )
+
+        self.assertIn("Fix loop rule:", prompt)
+        self.assertIn("You may edit files directly", prompt)
+        self.assertNotIn("Discussion mode:", prompt)
+
+    def test_resolve_path_uses_fallback_root_when_primary_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as primary_dir, tempfile.TemporaryDirectory() as fallback_dir:
+            primary_root = Path(primary_dir)
+            fallback_root = Path(fallback_dir)
+            fallback_file = fallback_root / "docs" / "protocol.md"
+            fallback_file.parent.mkdir()
+            fallback_file.write_text("protocol", encoding="utf-8")
+
+            resolved = agent_chat_watch.resolve_path(
+                "docs/protocol.md",
+                primary_root,
+                fallback_root=fallback_root,
+            )
+
+        self.assertEqual(resolved, fallback_file)
+
+    def test_resolve_path_prefers_primary_root_when_file_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as primary_dir, tempfile.TemporaryDirectory() as fallback_dir:
+            primary_root = Path(primary_dir)
+            fallback_root = Path(fallback_dir)
+            primary_file = primary_root / "docs" / "protocol.md"
+            fallback_file = fallback_root / "docs" / "protocol.md"
+            primary_file.parent.mkdir()
+            fallback_file.parent.mkdir()
+            primary_file.write_text("primary", encoding="utf-8")
+            fallback_file.write_text("fallback", encoding="utf-8")
+
+            resolved = agent_chat_watch.resolve_path(
+                "docs/protocol.md",
+                primary_root,
+                fallback_root=fallback_root,
+            )
+
+        self.assertEqual(resolved, primary_file)
+
 
 if __name__ == "__main__":
     unittest.main()
