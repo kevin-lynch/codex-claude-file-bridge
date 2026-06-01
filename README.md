@@ -26,6 +26,13 @@ For early product, architecture, or planning work, the watcher also supports a d
 
 ## Quick Start
 
+For projects that use this bridge for blocking audits, follow the canonical
+workflow in:
+
+```text
+docs/how_to_use.md
+```
+
 Create a local virtual environment and run the tests:
 
 ```bash
