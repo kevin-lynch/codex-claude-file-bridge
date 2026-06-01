@@ -65,6 +65,7 @@ Run a read-only product/spec discussion against another repo:
   --repo-root /absolute/path/to/target-repo \
   --protocol docs/agent_discussion_protocol.md \
   --mode discussion \
+  --init-if-missing \
   --agents=codex,claude \
   --poll=5 \
   --max-turns=20
@@ -120,6 +121,24 @@ Example starter chat:
 examples/spec_discussion_example.md
 ```
 
+To let the watcher create a starter chat file automatically, add:
+
+```bash
+--init-if-missing
+```
+
+By default, the starter message is addressed to the first enabled agent in `--agents`. Override that with:
+
+```bash
+--init-to codex
+```
+
+You can also seed a short custom starter body:
+
+```bash
+--init-message "Please compare the crawler enrichment plan and identify the safest next implementation slice before code edits."
+```
+
 ## Fresh Review Rule
 
 After every fix, the implementing agent must ask for a fresh artifact review:
@@ -159,7 +178,14 @@ AGENT_CHAT_CODEX_CMD
 AGENT_CHAT_CLAUDE_CMD
 AGENT_CHAT_CODEX_SANDBOX
 AGENT_CHAT_CLAUDE_WRITE
+AGENT_CHAT_CLAUDE_ISOLATED
 ```
+
+Claude isolation is enabled by default. The watcher runs Claude with no session
+persistence, no Chrome integration, an empty strict MCP config, disabled slash
+commands/plugins, no settings sources, and read-only built-in tools unless
+`--claude-write` is explicitly set. Use `--no-claude-isolated` only when you
+need the local Claude CLI's full default runtime.
 
 ## Safety Notes
 

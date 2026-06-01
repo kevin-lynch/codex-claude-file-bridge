@@ -66,6 +66,32 @@ The response body after the routing fields.
 
         self.assertIn("prompt sent through stdin", output)
 
+    def test_default_claude_command_uses_stateless_project_isolation(self) -> None:
+        command = agent_chat_watch.default_command("claude", REPO_ROOT, Path("/tmp/out"), "read-only")
+
+        self.assertEqual(command[1], "-p")
+        self.assertIn("--no-session-persistence", command)
+        self.assertIn("--no-chrome", command)
+        self.assertIn("--strict-mcp-config", command)
+        self.assertIn("--disable-slash-commands", command)
+        self.assertIn("--setting-sources", command)
+        self.assertEqual(command[command.index("--setting-sources") + 1], "")
+        self.assertIn("--mcp-config", command)
+        self.assertEqual(command[command.index("--mcp-config") + 1], '{"mcpServers":{}}')
+        self.assertIn("--tools", command)
+        self.assertEqual(command[command.index("--tools") + 1], "Read,Grep,Glob,Bash")
+
+    def test_default_claude_command_can_opt_out_of_project_isolation(self) -> None:
+        command = agent_chat_watch.default_command(
+            "claude",
+            REPO_ROOT,
+            Path("/tmp/out"),
+            "read-only",
+            claude_isolated=False,
+        )
+
+        self.assertEqual(command, [command[0], "-p"])
+
     def test_discussion_prompt_uses_peer_discussion_rules(self) -> None:
         latest = agent_chat_watch.MessageBlock(
             raw="raw",
@@ -153,6 +179,50 @@ The response body after the routing fields.
             )
 
         self.assertEqual(resolved, primary_file)
+
+    def test_build_initial_chat_text_is_parseable_discussion_starter(self) -> None:
+        text = agent_chat_watch.build_initial_chat_text(
+            "discussion",
+            REPO_ROOT,
+            "codex",
+        )
+
+        latest = agent_chat_watch.parse_latest_message(text)
+
+        self.assertIsNotNone(latest)
+        assert latest is not None
+        self.assertEqual(latest.sender, "kevin")
+        self.assertEqual(latest.recipient, "codex")
+        self.assertEqual(latest.status, "open")
+        self.assertEqual(latest.requested_action, "evaluate and discuss")
+        self.assertIn("Do not edit files during this discussion", latest.body)
+
+    def test_ensure_chat_file_creates_parent_dirs_and_does_not_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chat_file = Path(tmpdir) / "nested" / "agent_discussion.md"
+
+            created = agent_chat_watch.ensure_chat_file(
+                chat_file,
+                mode="discussion",
+                repo_root=REPO_ROOT,
+                recipient="codex",
+                message="Custom startup message.",
+            )
+            second_created = agent_chat_watch.ensure_chat_file(
+                chat_file,
+                mode="discussion",
+                repo_root=REPO_ROOT,
+                recipient="claude",
+                message="Replacement message.",
+            )
+
+            text = chat_file.read_text(encoding="utf-8")
+
+        self.assertTrue(created)
+        self.assertFalse(second_created)
+        self.assertIn("to: codex", text)
+        self.assertIn("Custom startup message.", text)
+        self.assertNotIn("Replacement message.", text)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,14 @@ HEADER_RE = re.compile(
 )
 
 ALLOWED_STATUSES = {"open", "answered", "closed", "blocked"}
+CLAUDE_READ_ONLY_TOOLS = "Read,Grep,Glob,Bash"
+
+
+def env_bool(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -256,7 +264,33 @@ def parse_agent_output(output: str, default_recipient: str) -> tuple[str, str, s
     return recipient, status, requested_action, body
 
 
-def default_command(agent_name: str, repo_root: Path, output_file: Path, codex_sandbox: str) -> list[str]:
+def claude_project_isolation_args(*, claude_write: bool) -> list[str]:
+    args = [
+        "--no-session-persistence",
+        "--no-chrome",
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--disable-slash-commands",
+        "--setting-sources",
+        "",
+    ]
+    if claude_write:
+        args.extend(["--permission-mode", "acceptEdits", "--tools", "default"])
+    else:
+        args.extend(["--tools", CLAUDE_READ_ONLY_TOOLS])
+    return args
+
+
+def default_command(
+    agent_name: str,
+    repo_root: Path,
+    output_file: Path,
+    codex_sandbox: str,
+    *,
+    claude_isolated: bool = True,
+    claude_write: bool = False,
+) -> list[str]:
     executable = resolve_agent_executable(agent_name)
     if agent_name == "codex":
         return [
@@ -274,7 +308,12 @@ def default_command(agent_name: str, repo_root: Path, output_file: Path, codex_s
     if agent_name == "claude":
         # Claude Code commonly supports `claude -p` for non-interactive print mode.
         # If this local installation is broken, pass --claude-cmd to override after fixing it.
-        return [executable, "-p"]
+        cmd = [executable, "-p"]
+        if claude_isolated:
+            cmd.extend(claude_project_isolation_args(claude_write=claude_write))
+        elif claude_write:
+            cmd.extend(["--permission-mode", "acceptEdits", "--tools", "default"])
+        return cmd
     raise ValueError(f"No default command for agent: {agent_name}")
 
 
@@ -316,15 +355,21 @@ def run_agent(
     timeout_seconds: int,
     codex_sandbox: str,
     claude_write: bool,
+    claude_isolated: bool = True,
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="agent-chat-") as tmpdir:
         output_file = Path(tmpdir) / f"{agent_name}-last-message.txt"
         if command_override:
             cmd = shlex.split(command_override)
         else:
-            cmd = default_command(agent_name, repo_root, output_file, codex_sandbox)
-            if agent_name == "claude" and claude_write:
-                cmd.extend(["--permission-mode", "acceptEdits", "--tools", "default"])
+            cmd = default_command(
+                agent_name,
+                repo_root,
+                output_file,
+                codex_sandbox,
+                claude_isolated=claude_isolated,
+                claude_write=claude_write,
+            )
 
         env = os.environ.copy()
         nvm_bin = resolve_nvm_default_bin()
@@ -397,6 +442,80 @@ def resolve_path(path_value: str, primary_root: Path, fallback_root: Path | None
     return primary_candidate
 
 
+def parse_agents(agents_value: str) -> list[str]:
+    return [agent.strip().lower() for agent in agents_value.split(",") if agent.strip()]
+
+
+def default_initial_message(mode: str, repo_root: Path) -> str:
+    if mode == "discussion":
+        return f"""Please evaluate this project, then discuss the implementation direction with the other agent before closing.
+
+Target repo:
+
+- {repo_root}
+
+Goal:
+
+Agree the best next implementation direction and identify important risks, gaps, or sequencing decisions before code edits.
+
+Instructions:
+
+- Do not edit files during this discussion.
+- Start by giving the other agent your view of the strongest direction, biggest gaps, and highest-risk assumptions.
+- Ask the other agent to challenge your view and propose a synthesis.
+- Keep the thread open until there is a shared recommendation or a clearly blocked human decision."""
+
+    return f"""Please review this target and identify any required fixes before closing.
+
+Target repo:
+
+- {repo_root}
+
+Instructions:
+
+- Read the relevant project files before answering.
+- If there are required fixes, address the implementing agent with status: open.
+- If there are only optional notes or no feedback, address Kevin with status: closed."""
+
+
+def build_initial_chat_text(
+    mode: str,
+    repo_root: Path,
+    recipient: str,
+    message: str | None = None,
+) -> str:
+    title = "Agent Discussion" if mode == "discussion" else "Agent Chat"
+    requested_action = "evaluate and discuss" if mode == "discussion" else "initial review"
+    body = message.strip() if message and message.strip() else default_initial_message(mode, repo_root)
+    now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    return (
+        f"# {title}\n\n"
+        f"## {now} | from: kevin | to: {recipient} | status: open\n"
+        f"requested_action: {requested_action}\n\n"
+        f"{body}\n\n"
+        f"---\n"
+    )
+
+
+def ensure_chat_file(
+    chat_file: Path,
+    mode: str,
+    repo_root: Path,
+    recipient: str,
+    message: str | None = None,
+) -> bool:
+    if chat_file.exists():
+        return False
+
+    chat_file.parent.mkdir(parents=True, exist_ok=True)
+    chat_file.write_text(
+        build_initial_chat_text(mode, repo_root, recipient, message=message),
+        encoding="utf-8",
+    )
+    return True
+
+
 def main() -> int:
     bridge_root = repo_root_from_script()
     parser = argparse.ArgumentParser(description="Watch an agent chat file and invoke local agent CLIs.")
@@ -433,6 +552,19 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=900, help="Per-agent command timeout in seconds.")
     parser.add_argument("--dry-run", action="store_true", help="Print what would happen without invoking agents.")
     parser.add_argument(
+        "--init-if-missing",
+        action="store_true",
+        help="Create a starter chat file when the chat file path does not exist.",
+    )
+    parser.add_argument(
+        "--init-to",
+        help="Recipient for an auto-created starter message. Defaults to the first enabled agent.",
+    )
+    parser.add_argument(
+        "--init-message",
+        help="Body text for an auto-created starter message. Defaults to a mode-specific template.",
+    )
+    parser.add_argument(
         "--codex-sandbox",
         default=os.getenv("AGENT_CHAT_CODEX_SANDBOX", "read-only"),
         choices=("read-only", "workspace-write", "danger-full-access"),
@@ -444,6 +576,23 @@ def main() -> int:
         default=os.getenv("AGENT_CHAT_CLAUDE_WRITE", "").lower() in {"1", "true", "yes"},
         help="Allow Claude to use edit-capable tools where the local Claude CLI supports them.",
     )
+    parser.add_argument(
+        "--claude-isolated",
+        dest="claude_isolated",
+        action="store_true",
+        default=env_bool("AGENT_CHAT_CLAUDE_ISOLATED", default=True),
+        help=(
+            "Run Claude with stateless project isolation: no session persistence, "
+            "no Chrome integration, strict empty MCP config, no slash/plugin commands, "
+            "and no settings sources. Enabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--no-claude-isolated",
+        dest="claude_isolated",
+        action="store_false",
+        help="Use the local Claude CLI default runtime instead of the bridge's isolated runtime.",
+    )
     parser.add_argument("--codex-cmd", default=os.getenv("AGENT_CHAT_CODEX_CMD"), help="Override Codex command.")
     parser.add_argument("--claude-cmd", default=os.getenv("AGENT_CHAT_CLAUDE_CMD"), help="Override Claude command.")
 
@@ -453,9 +602,28 @@ def main() -> int:
     chat_file = resolve_path(args.chat_file, repo_root)
     protocol_file = resolve_path(args.protocol, repo_root, fallback_root=bridge_root)
 
-    agents = {agent.strip().lower() for agent in args.agents.split(",") if agent.strip()}
+    ordered_agents = parse_agents(args.agents)
+    agents = set(ordered_agents)
+    if not ordered_agents:
+        parser.error("--agents must include at least one agent")
+
+    init_recipient = args.init_to.strip().lower() if args.init_to else ordered_agents[0]
+    if args.init_to and init_recipient not in agents:
+        parser.error("--init-to must be one of the enabled --agents")
+
     turns_taken = 0
     last_handled_raw = None
+
+    if args.init_if_missing:
+        created = ensure_chat_file(
+            chat_file,
+            mode=args.mode,
+            repo_root=repo_root,
+            recipient=init_recipient,
+            message=args.init_message,
+        )
+        if created:
+            print(f"Created starter chat file: {chat_file}")
 
     print(f"Watching {chat_file}")
     print(f"Repository root: {repo_root}")
@@ -507,6 +675,7 @@ def main() -> int:
                     timeout_seconds=args.timeout,
                     codex_sandbox=args.codex_sandbox,
                     claude_write=args.claude_write,
+                    claude_isolated=args.claude_isolated,
                 )
                 recipient, status, requested_action, body = parse_agent_output(
                     raw_output, default_recipient=latest.sender

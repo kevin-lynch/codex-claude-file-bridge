@@ -66,8 +66,10 @@ python3 scripts/agent_chat_watch.py docs/agent_chat_example.md --agents=codex,cl
 Peer discussion loop:
 
 ```bash
-python3 scripts/agent_chat_watch.py examples/spec_discussion_example.md --protocol docs/agent_discussion_protocol.md --mode discussion --agents=codex,claude --poll=5 --max-turns=20
+python3 scripts/agent_chat_watch.py examples/spec_discussion_example.md --protocol docs/agent_discussion_protocol.md --mode discussion --init-if-missing --agents=codex,claude --poll=5 --max-turns=20
 ```
+
+Use `--init-if-missing` when you want the watcher to create the chat file before the first turn. It does not overwrite an existing chat file.
 
 ## Completion Gate
 

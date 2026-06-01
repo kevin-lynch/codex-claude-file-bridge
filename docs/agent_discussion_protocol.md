@@ -103,7 +103,10 @@ Run from the bridge repo while targeting another repo:
   --repo-root /absolute/path/to/target-repo \
   --protocol docs/agent_discussion_protocol.md \
   --mode discussion \
+  --init-if-missing \
   --agents=codex,claude \
   --poll=5 \
   --max-turns=20
 ```
+
+`--init-if-missing` creates a starter chat file if the path does not exist yet. The starter message is addressed to the first enabled agent in `--agents`, unless `--init-to` is provided.
