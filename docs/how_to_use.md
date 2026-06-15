@@ -148,11 +148,17 @@ By default, Claude runs with:
 - no Chrome integration
 - strict empty MCP config
 - disabled slash/plugin commands
-- no settings sources
+- no user/project settings sources
+- Claude Opus 4.8 (`--model claude-opus-4-8`)
+- max effort (`--effort max`)
+- explicit extended thinking
 - read-only built-in tools unless `--claude-write` is explicitly set
 
 This is intentional. It allows separate project audits to run in parallel
 without sharing Claude session, MCP, Chrome, plugin, or project state.
+
+Override the built-in Claude model and effort with `--claude-model` /
+`--claude-effort` or `AGENT_CHAT_CLAUDE_MODEL` / `AGENT_CHAT_CLAUDE_EFFORT`.
 
 Do not use `--no-claude-isolated`, `AGENT_CHAT_CLAUDE_ISOLATED=false`, or
 `AGENT_CHAT_CLAUDE_CMD` unless explicitly debugging the bridge itself.

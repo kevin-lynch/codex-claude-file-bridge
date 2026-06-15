@@ -1,3 +1,4 @@
+import json
 import shlex
 import sys
 import tempfile
@@ -70,6 +71,12 @@ The response body after the routing fields.
         command = agent_chat_watch.default_command("claude", REPO_ROOT, Path("/tmp/out"), "read-only")
 
         self.assertEqual(command[1], "-p")
+        self.assertIn("--model", command)
+        self.assertEqual(command[command.index("--model") + 1], "claude-opus-4-8")
+        self.assertIn("--effort", command)
+        self.assertEqual(command[command.index("--effort") + 1], "max")
+        self.assertIn("--settings", command)
+        self.assertEqual(json.loads(command[command.index("--settings") + 1]), {"alwaysThinkingEnabled": True})
         self.assertIn("--no-session-persistence", command)
         self.assertIn("--no-chrome", command)
         self.assertIn("--strict-mcp-config", command)
@@ -90,7 +97,30 @@ The response body after the routing fields.
             claude_isolated=False,
         )
 
-        self.assertEqual(command, [command[0], "-p"])
+        self.assertEqual(
+            command[:7],
+            [command[0], "-p", "--model", "claude-opus-4-8", "--effort", "max", "--settings"],
+        )
+        self.assertEqual(json.loads(command[7]), {"alwaysThinkingEnabled": True})
+
+    def test_default_claude_command_allows_model_and_effort_overrides(self) -> None:
+        command = agent_chat_watch.default_command(
+            "claude",
+            REPO_ROOT,
+            Path("/tmp/out"),
+            "read-only",
+            claude_model="claude-opus-4-8",
+            claude_effort="xhigh",
+        )
+
+        self.assertEqual(command[command.index("--model") + 1], "claude-opus-4-8")
+        self.assertEqual(command[command.index("--effort") + 1], "xhigh")
+
+    def test_parse_claude_effort_normalizes_and_validates_values(self) -> None:
+        self.assertEqual(agent_chat_watch.parse_claude_effort(" MAX "), "max")
+
+        with self.assertRaisesRegex(ValueError, "Unsupported Claude effort"):
+            agent_chat_watch.parse_claude_effort("bad")
 
     def test_discussion_prompt_uses_peer_discussion_rules(self) -> None:
         latest = agent_chat_watch.MessageBlock(

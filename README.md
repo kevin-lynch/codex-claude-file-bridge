@@ -184,14 +184,19 @@ The watcher supports:
 AGENT_CHAT_CODEX_CMD
 AGENT_CHAT_CLAUDE_CMD
 AGENT_CHAT_CODEX_SANDBOX
+AGENT_CHAT_CLAUDE_MODEL
+AGENT_CHAT_CLAUDE_EFFORT
 AGENT_CHAT_CLAUDE_WRITE
 AGENT_CHAT_CLAUDE_ISOLATED
 ```
 
 Claude isolation is enabled by default. The watcher runs Claude with no session
 persistence, no Chrome integration, an empty strict MCP config, disabled slash
-commands/plugins, no settings sources, and read-only built-in tools unless
-`--claude-write` is explicitly set. Use `--no-claude-isolated` only when you
+commands/plugins, no user/project settings sources, Claude Opus 4.8
+(`--model claude-opus-4-8`), max effort (`--effort max`), explicit extended thinking, and
+read-only built-in tools unless `--claude-write` is explicitly set. Override the
+built-in Claude model and effort with `--claude-model` / `--claude-effort` or
+the matching environment variables. Use `--no-claude-isolated` only when you
 need the local Claude CLI's full default runtime.
 
 ## Safety Notes

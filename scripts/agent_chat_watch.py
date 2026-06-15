@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import re
 import shlex
@@ -21,9 +22,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from shutil import which
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import which
 from typing import Optional
 
 
@@ -34,6 +35,13 @@ HEADER_RE = re.compile(
 
 ALLOWED_STATUSES = {"open", "answered", "closed", "blocked"}
 CLAUDE_READ_ONLY_TOOLS = "Read,Grep,Glob,Bash"
+CLAUDE_DEFAULT_MODEL = "claude-opus-4-8"
+CLAUDE_DEFAULT_EFFORT = "max"
+CLAUDE_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+CLAUDE_THINKING_SETTINGS = json.dumps(
+    {"alwaysThinkingEnabled": True},
+    separators=(",", ":"),
+)
 
 
 def env_bool(name: str, *, default: bool) -> bool:
@@ -41,6 +49,21 @@ def env_bool(name: str, *, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_text(name: str, *, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip()
+
+
+def parse_claude_effort(value: str) -> str:
+    effort = value.strip().lower()
+    if effort not in CLAUDE_EFFORT_LEVELS:
+        expected = ", ".join(CLAUDE_EFFORT_LEVELS)
+        raise ValueError(f"Unsupported Claude effort: {value!r}. Expected one of: {expected}.")
+    return effort
 
 
 @dataclass
@@ -290,6 +313,8 @@ def default_command(
     *,
     claude_isolated: bool = True,
     claude_write: bool = False,
+    claude_model: str = CLAUDE_DEFAULT_MODEL,
+    claude_effort: str = CLAUDE_DEFAULT_EFFORT,
 ) -> list[str]:
     executable = resolve_agent_executable(agent_name)
     if agent_name == "codex":
@@ -308,7 +333,18 @@ def default_command(
     if agent_name == "claude":
         # Claude Code commonly supports `claude -p` for non-interactive print mode.
         # If this local installation is broken, pass --claude-cmd to override after fixing it.
-        cmd = [executable, "-p"]
+        claude_model = claude_model.strip() or CLAUDE_DEFAULT_MODEL
+        claude_effort = parse_claude_effort(claude_effort)
+        cmd = [
+            executable,
+            "-p",
+            "--model",
+            claude_model,
+            "--effort",
+            claude_effort,
+            "--settings",
+            CLAUDE_THINKING_SETTINGS,
+        ]
         if claude_isolated:
             cmd.extend(claude_project_isolation_args(claude_write=claude_write))
         elif claude_write:
@@ -356,6 +392,8 @@ def run_agent(
     codex_sandbox: str,
     claude_write: bool,
     claude_isolated: bool = True,
+    claude_model: str = CLAUDE_DEFAULT_MODEL,
+    claude_effort: str = CLAUDE_DEFAULT_EFFORT,
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="agent-chat-") as tmpdir:
         output_file = Path(tmpdir) / f"{agent_name}-last-message.txt"
@@ -369,6 +407,8 @@ def run_agent(
                 codex_sandbox,
                 claude_isolated=claude_isolated,
                 claude_write=claude_write,
+                claude_model=claude_model,
+                claude_effort=claude_effort,
             )
 
         env = os.environ.copy()
@@ -595,8 +635,25 @@ def main() -> int:
     )
     parser.add_argument("--codex-cmd", default=os.getenv("AGENT_CHAT_CODEX_CMD"), help="Override Codex command.")
     parser.add_argument("--claude-cmd", default=os.getenv("AGENT_CHAT_CLAUDE_CMD"), help="Override Claude command.")
+    parser.add_argument(
+        "--claude-model",
+        default=env_text("AGENT_CHAT_CLAUDE_MODEL", default=CLAUDE_DEFAULT_MODEL),
+        help="Claude model or alias for the built-in Claude command. Defaults to Claude Opus 4.8.",
+    )
+    parser.add_argument(
+        "--claude-effort",
+        default=env_text("AGENT_CHAT_CLAUDE_EFFORT", default=CLAUDE_DEFAULT_EFFORT),
+        type=parse_claude_effort,
+        choices=CLAUDE_EFFORT_LEVELS,
+        help="Claude effort level for the built-in Claude command. Defaults to max.",
+    )
 
     args = parser.parse_args()
+    try:
+        args.claude_effort = parse_claude_effort(args.claude_effort)
+    except ValueError as exc:
+        parser.error(str(exc))
+    args.claude_model = args.claude_model.strip() or CLAUDE_DEFAULT_MODEL
 
     repo_root = Path(args.repo_root).expanduser().resolve()
     chat_file = resolve_path(args.chat_file, repo_root)
@@ -676,6 +733,8 @@ def main() -> int:
                     codex_sandbox=args.codex_sandbox,
                     claude_write=args.claude_write,
                     claude_isolated=args.claude_isolated,
+                    claude_model=args.claude_model,
+                    claude_effort=args.claude_effort,
                 )
                 recipient, status, requested_action, body = parse_agent_output(
                     raw_output, default_recipient=latest.sender
